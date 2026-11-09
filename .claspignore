@@ -1,0 +1,4 @@
+**/*.md
+**/node_modules/**
+Config.example.gs
+blog/**

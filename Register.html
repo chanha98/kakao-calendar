@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <style>
+    :root { --fg:#1f2328; --sub:#59636e; --line:#d8dee4; --bg:#f6f8fa; --acc:#1a73e8; --ok:#1e7e34; --err:#c62828; }
+    * { box-sizing: border-box; }
+    body { margin:0; padding:20px 16px 48px; font: 15px/1.6 -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; color:var(--fg); background:#fff; }
+    main { max-width: 560px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    .lead { color: var(--sub); margin: 0 0 20px; }
+    .step { border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:12px; }
+    .step h2 { font-size:16px; margin:0 0 6px; }
+    .step h2 span { display:inline-block; width:24px; height:24px; line-height:24px; text-align:center; border-radius:50%; background:var(--acc); color:#fff; font-size:13px; margin-right:6px; }
+    .step p, .step li { margin:4px 0; }
+    ol { padding-left: 20px; margin: 6px 0; }
+    .note { background:var(--bg); border-radius:8px; padding:8px 10px; font-size:13px; color:var(--sub); margin-top:8px; }
+    .email { font-weight:600; word-break:break-all; }
+    label { display:block; font-weight:600; margin:12px 0 4px; }
+    input { width:100%; padding:11px 12px; font-size:16px; border:1px solid var(--line); border-radius:8px; }
+    button { width:100%; margin-top:16px; padding:13px; font-size:16px; font-weight:600; color:#fff; background:var(--acc); border:0; border-radius:10px; }
+    button:disabled { opacity:.5; }
+    button.ghost { background:#fff; color:var(--acc); border:1px solid var(--acc); margin-top:8px; }
+    .msg { margin-top:12px; font-size:14px; }
+    .msg.err { color: var(--err); }
+    .done { border:2px solid var(--ok); border-radius:12px; padding:16px; margin-top:16px; }
+    .done h2 { color: var(--ok); margin-top:0; font-size:18px; }
+    .code { font: 600 18px ui-monospace, Menlo, Consolas, monospace; text-align:center; letter-spacing:.5px; }
+    [hidden] { display:none !important; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>카톡 → 캘린더 등록</h1>
+  <p class="lead">카톡 단톡방 일정 공지를 아이폰 단축어 한 번으로 구글 캘린더에 정리해 줍니다. 아래 순서대로 한 번만 설정하면 됩니다. (5분)</p>
+
+  <section class="step">
+    <h2><span>1</span>일정을 넣을 캘린더 만들기 (권장)</h2>
+    <p>이 서비스 관리자가 공유받은 캘린더를 볼 수 있으므로, 개인 캘린더 대신 <b>업무용 캘린더를 새로 하나</b> 만들어 쓰는 것을 권장합니다.</p>
+    <ol>
+      <li>휴대폰이면 Safari에서 <b>calendar.google.com</b> 접속 → 아래 <b>데스크톱 버전</b>으로 전환 (구글 캘린더 앱에서는 공유 설정이 안 됩니다. PC가 가장 편해요)</li>
+      <li>왼쪽 <b>다른 캘린더 +</b> → <b>새 캘린더 만들기</b> → 이름 예: <b>업무</b> → 만들기</li>
+    </ol>
+  </section>
+
+  <section class="step">
+    <h2><span>2</span>캘린더 공유하기</h2>
+    <ol>
+      <li>왼쪽 목록에서 방금 만든 캘린더에 마우스를 올리고 <b>⋮ → 설정 및 공유</b></li>
+      <li><b>특정 사용자 또는 그룹과 공유</b> → <b>+ 사용자 및 그룹 추가</b></li>
+      <li>이메일: <span class="email"><?= ownerEmail ?></span></li>
+      <li>권한: <b>일정 변경</b> 으로 선택 → 보내기</li>
+    </ol>
+  </section>
+
+  <section class="step">
+    <h2><span>3</span>캘린더 ID 복사</h2>
+    <p>같은 설정 화면을 아래로 내려 <b>캘린더 통합</b> 항목의 <b>캘린더 ID</b>를 복사합니다.</p>
+    <div class="note">보통 <code>...@group.calendar.google.com</code> 으로 끝나는 긴 주소입니다.</div>
+  </section>
+
+  <section class="step" id="formBox">
+    <h2><span>4</span>등록하고 개인 코드 받기</h2>
+    <form id="f">
+      <label for="name">이름</label>
+      <input id="name" maxlength="30" placeholder="예: 홍길동" required>
+      <label for="calendarId">캘린더 ID</label>
+      <input id="calendarId" placeholder="xxxx@group.calendar.google.com" autocapitalize="off" autocorrect="off" spellcheck="false" required>
+      <label for="invite">초대 코드</label>
+      <input id="invite" placeholder="링크와 함께 받은 초대 코드" autocapitalize="off" autocorrect="off" spellcheck="false" required>
+      <button id="submit" type="submit">등록하기</button>
+      <div id="msg" class="msg" role="status"></div>
+    </form>
+  </section>
+
+  <section class="done" id="done" hidden>
+    <h2>✅ 등록 완료</h2>
+    <p><b id="doneCal"></b> 캘린더로 연결되었습니다. 아래 <b>개인 코드</b>를 복사해 두세요. 단축어를 추가할 때 입력합니다.</p>
+    <input id="codeBox" class="code" readonly>
+    <button type="button" class="ghost" id="copy">코드 복사</button>
+    <div class="note">⚠ 개인 코드는 비밀번호와 같습니다. 다른 사람에게 알려주지 마세요. 잃어버리면 관리자에게 문의하세요.</div>
+
+    <h2 style="color:var(--fg);margin-top:20px;font-size:16px">다음: 아이폰 단축어 추가</h2>
+    <ol>
+      <li id="scLine">관리자에게 받은 <b>단축어 링크</b>를 아이폰에서 엽니다.</li>
+      <li><b>단축어 추가</b> → 코드를 묻는 칸에 위 <b>개인 코드</b> 붙여넣기</li>
+      <li>사용법: 카톡 메시지를 길게 눌러 <b>복사</b> → <b>카톡→캘린더</b> 단축어 실행 → 미리보기 확인 → <b>반영</b></li>
+    </ol>
+  </section>
+</main>
+
+<script>
+  var f = document.getElementById('f');
+  var btn = document.getElementById('submit');
+  var msg = document.getElementById('msg');
+
+  f.addEventListener('submit', function (e) {
+    e.preventDefault();
+    btn.disabled = true;
+    msg.className = 'msg';
+    msg.textContent = '확인 중입니다… (캘린더 권한을 확인하느라 10초 정도 걸릴 수 있어요)';
+    google.script.run
+      .withSuccessHandler(function (r) {
+        document.getElementById('formBox').hidden = true;
+        document.getElementById('done').hidden = false;
+        document.getElementById('doneCal').textContent = r.calendarName;
+        document.getElementById('codeBox').value = r.code;
+        if (r.shortcutUrl) {
+          var li = document.getElementById('scLine');
+          li.innerHTML = '';
+          li.appendChild(document.createTextNode('아이폰에서 단축어 링크 열기: '));
+          var a = document.createElement('a');
+          a.href = r.shortcutUrl; a.textContent = r.shortcutUrl; a.target = '_blank';
+          li.appendChild(a);
+        }
+        window.scrollTo(0, 0);
+      })
+      .withFailureHandler(function (err) {
+        btn.disabled = false;
+        msg.className = 'msg err';
+        msg.textContent = (err && err.message) ? err.message : String(err);
+      })
+      .registerUser({
+        name: document.getElementById('name').value,
+        calendarId: document.getElementById('calendarId').value,
+        invite: document.getElementById('invite').value
+      });
+  });
+
+  document.getElementById('copy').addEventListener('click', function () {
+    var box = document.getElementById('codeBox');
+    box.select(); box.setSelectionRange(0, 999);
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    this.textContent = ok ? '복사됨 ✓' : '코드를 길게 눌러 복사하세요';
+  });
+</script>
+</body>
+</html>

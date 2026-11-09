@@ -1,0 +1,10 @@
+# 비밀값 (API 키, SHARED_SECRET, 초대 코드) — Config.example.gs를 복사해서 사용
+Config.gs
+
+# clasp 개인 설정 (내 Apps Script 프로젝트 ID / 로그인 정보)
+.clasp.json
+.clasprc.json
+
+node_modules/
+.DS_Store
+Thumbs.db
