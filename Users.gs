@@ -64,20 +64,7 @@ function registerUser(form) {
       throw new Error('이미 등록된 캘린더입니다. 코드를 잃어버렸다면 관리자에게 문의해 주세요.');
     }
 
-    let cal = CalendarApp.getCalendarById(calId);
-    if (!cal) {
-      try { cal = CalendarApp.subscribeToCalendar(calId, { hidden: true, selected: false }); } catch (e) { cal = null; }
-    }
-    if (!cal) throw new Error('캘린더에 접근할 수 없습니다. ① 공유 대상 이메일 ② 권한 "일정 변경" ③ 캘린더 ID를 다시 확인해 주세요. 공유 직후라면 1~2분 뒤 다시 시도해 주세요.');
-    if (cal.isOwnedByMe()) throw new Error('이 캘린더는 등록할 수 없습니다. 본인 캘린더의 ID를 입력해 주세요.');
-
-    // 수정 권한 확인 (1년 뒤에 1분짜리 일정을 만들었다가 바로 삭제)
-    try {
-      const t = new Date(Date.now() + 365 * 86400000);
-      cal.createEvent('[카톡캘린더 연결 확인]', t, new Date(t.getTime() + 60000)).deleteEvent();
-    } catch (e) {
-      throw new Error('캘린더를 볼 수만 있고 수정할 권한이 없습니다. 공유 권한을 "일정 변경"으로 바꿔 주세요.');
-    }
+    const cal = connectCalendar_(calId);
 
     const code = 'kc-' + Utilities.getUuid().replace(/-/g, '').slice(0, 20);
     PropertiesService.getScriptProperties().setProperty(USER_PREFIX_ + code, JSON.stringify({
@@ -87,6 +74,25 @@ function registerUser(form) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/** 공유받은 캘린더에 연결하고 수정 권한까지 확인. 실패하면 이유를 담은 오류 */
+function connectCalendar_(calId) {
+  let cal = CalendarApp.getCalendarById(calId);
+  if (!cal) {
+    try { cal = CalendarApp.subscribeToCalendar(calId, { hidden: true, selected: false }); } catch (e) { cal = null; }
+  }
+  if (!cal) throw new Error('캘린더에 접근할 수 없습니다. ① 공유 대상 이메일 ② 권한 "일정 변경" ③ 캘린더 ID를 다시 확인해 주세요. 공유 직후라면 1~2분 뒤 다시 시도해 주세요.');
+  if (cal.isOwnedByMe()) throw new Error('이 캘린더는 등록할 수 없습니다. 본인 캘린더의 ID를 입력해 주세요.');
+
+  // 수정 권한 확인 (1년 뒤에 1분짜리 일정을 만들었다가 바로 삭제)
+  try {
+    const t = new Date(Date.now() + 365 * 86400000);
+    cal.createEvent('[카톡캘린더 연결 확인]', t, new Date(t.getTime() + 60000)).deleteEvent();
+  } catch (e) {
+    throw new Error('캘린더를 볼 수만 있고 수정할 권한이 없습니다. 공유 권한을 "일정 변경"으로 바꿔 주세요.');
+  }
+  return cal;
 }
 
 // ---------------------------------------------------------------- 관리자용 (편집기에서 실행)
@@ -114,6 +120,38 @@ const ADMIN_TARGET = '';   // 예: '홍길동' 또는 'kc-xxxx'
 function disableUser() { setUserState_(ADMIN_TARGET, 'disable'); }
 function enableUser()  { setUserState_(ADMIN_TARGET, 'enable'); }
 function deleteUser()  { setUserState_(ADMIN_TARGET, 'delete'); }
+
+/**
+ * 사용자의 캘린더만 바꾸기 (개인 코드·단축어는 그대로)
+ * ADMIN_TARGET에 이름이나 코드, ADMIN_NEW_CALENDAR에 새 캘린더 ID를 적고 실행
+ * 예: 테스트용 캘린더로 바꿨다가, 괜찮으면 원래 캘린더(지메일 주소)로 다시 바꾸기
+ */
+const ADMIN_NEW_CALENDAR = '';   // 예: 'xxxx@group.calendar.google.com' 또는 'xxxx@gmail.com'
+
+function changeUserCalendar() {
+  const target = ADMIN_TARGET;
+  const calId = String(ADMIN_NEW_CALENDAR || '').trim();
+  if (!target) throw new Error('Users.gs의 ADMIN_TARGET에 이름이나 코드를 적어 주세요.');
+  if (!calId) throw new Error('Users.gs의 ADMIN_NEW_CALENDAR에 새 캘린더 ID를 적어 주세요.');
+
+  const hits = allUsers_().filter(function (u) { return u.code === target || u.name === target; });
+  if (hits.length !== 1) throw new Error('대상이 ' + hits.length + '명입니다. 코드로 지정해 주세요.');
+  const u = hits[0];
+  if (allUsers_().some(function (o) { return o.code !== u.code && o.calendarId === calId; })) {
+    throw new Error('다른 사용자가 이미 쓰고 있는 캘린더입니다.');
+  }
+
+  const cal = connectCalendar_(calId);
+  const p = PropertiesService.getScriptProperties();
+  const key = USER_PREFIX_ + u.code;
+  const data = JSON.parse(p.getProperty(key));
+  const before = (data.calendarName || '') + ' (' + data.calendarId + ')';
+  data.calendarId = calId;
+  data.calendarName = cal.getName();
+  p.setProperty(key, JSON.stringify(data));
+  p.deleteProperty('LAST_TS_' + u.code);   // 대화 내보내기 처리 기록 초기화 (새 캘린더 기준으로 다시)
+  console.log(u.name + ': 캘린더 변경 ' + before + ' → ' + cal.getName() + ' (' + calId + ')');
+}
 
 function setUserState_(target, op) {
   if (!target) throw new Error('Users.gs의 ADMIN_TARGET에 이름이나 코드를 적어 주세요.');

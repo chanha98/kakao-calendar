@@ -76,9 +76,9 @@ function handleParse_(text, cfg, user, images) {
   images = images || [];
   const extracted = extractMessages_(text, user.stateKey);
   if (!extracted.messages.trim() && !images.length) {
-    return { ok: true, token: '', summary: extracted.isExport
+    return { ok: true, summary: extracted.isExport
       ? '지난번 이후 새 메시지가 없습니다.'
-      : '분석할 텍스트가 없습니다.' };
+      : '분석할 텍스트가 없습니다.\n\n' + receivedInfo_(text, images) };
   }
 
   const cal = getCalendar_(user.calendarId);
@@ -88,7 +88,7 @@ function handleParse_(text, cfg, user, images) {
   if (!actions.length) {
     // 새 메시지는 확인했으니 다음엔 건너뛰도록 처리 시각만 저장
     if (extracted.latestTs) saveLastTs_(user.stateKey, extracted.latestTs);
-    return { ok: true, token: '', summary: '일정·소품 관련 내용이 없습니다.' };
+    return { ok: true, summary: '일정·소품 관련 내용이 없습니다.\n\n' + receivedInfo_(text, images) };
   }
 
   const token = Utilities.getUuid();
@@ -103,7 +103,15 @@ function handleParse_(text, cfg, user, images) {
   return { ok: true, token: token, summary: formatSummary_(actions, byId) };
 }
 
-const MAX_IMAGES_ = 5;
+/** 결과가 없을 때 서버가 실제로 받은 내용을 알려줌 (단축어가 이미지를 못 보낸 경우 등 원인 파악용) */
+function receivedInfo_(text, images) {
+  const t = String(text || '').trim();
+  const head = t.replace(/\s+/g, ' ').slice(0, 40);
+  return '(받은 내용: 이미지·PDF ' + images.length + '개, 글 ' + t.length + '자' +
+    (t && !images.length ? ' "' + head + (t.length > 40 ? '…' : '') + '"' : '') + ')';
+}
+
+const MAX_IMAGES_ = 8;
 const MAX_IMAGE_B64_ = 6.5 * 1024 * 1024;   // base64 기준 약 5MB (Claude API 이미지 한도)
 
 /**
@@ -157,8 +165,9 @@ function listEvents_(cal) {
 // ---------------------------------------------------------------- apply
 
 function handleApply_(token, cfg, user) {
+  if (!token) return { ok: true, summary: '반영할 내용이 없습니다. 캘린더는 바뀌지 않았습니다.' };
   const cache = CacheService.getScriptCache();
-  const raw = token && cache.get('pending:' + token);
+  const raw = cache.get('pending:' + token);
   const pending = raw && JSON.parse(raw);
   if (!pending || pending.user !== user.code) {
     return { ok: false, summary: '승인 시간(10분)이 지났거나 이미 반영했습니다. 다시 실행해 주세요.' };
@@ -238,25 +247,59 @@ function formatSummary_(actions, eventsById) {
   });
   const full = '이렇게 반영할까요?\n\n' + out.join('\n');
   // 단축어 메뉴 창은 설명 글을 스크롤할 수 없어서 길면 반영/취소 버튼이 화면 밖으로 밀려남 → 짧은 목록으로
-  return full.length <= SUMMARY_MAX_CHARS_ ? full : compactSummary_(actions);
+  const lineCount = full.split('\n').length;
+  return full.length <= SUMMARY_MAX_CHARS_ && lineCount <= SUMMARY_MAX_LINES_
+    ? full : compactSummary_(actions, eventsById);
 }
 
-const SUMMARY_MAX_CHARS_ = 900;
-const COMPACT_MAX_LINES_ = 12;
+// 아이폰 글자 크기를 키운 경우 한 줄이 두 줄로 접히므로 넉넉히 짧게 잡음
+const SUMMARY_MAX_CHARS_ = 300;
+const SUMMARY_MAX_LINES_ = 10;
+const COMPACT_MAX_DATES_ = 5;
+const COMPACT_MAX_CHANGES_ = 3;
 
-/** 일정이 많을 때: 한 줄씩(제목은 짧게), 메모 생략, 넘치면 "…외 N개" */
-function compactSummary_(actions) {
-  const label = { create: '새', update: '변경', cancel: '취소' };
+/**
+ * 일정이 많을 때: 날짜별 개수만 보여 주고, 기존 일정을 건드리는 변경·취소만 따로 나열.
+ * 전체 화면이 15줄 안쪽이 되도록 제한 (넘치면 단축어 메뉴의 반영/취소 버튼이 화면 밖으로 밀려남)
+ */
+function compactSummary_(actions, eventsById) {
   const cut = function (s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) + '…' : s; };
-  const lines = actions.slice(0, COMPACT_MAX_LINES_).map(function (a) {
-    const when = a.start ? fmtRange_(a.start, a.end, a.all_day) : '';
-    return (a.important ? '❗' : '') + '[' + (label[a.type] || a.type) + '] ' +
-      (when ? when + ' ' : '') + cut(a.title || '(기존 일정)', 14);
+  const count = function (t) { return actions.filter(function (a) { return a.type === t; }).length; };
+  const out = ['일정 ' + actions.length + '개를 반영할까요?',
+    '새 ' + count('create') + ' · 변경 ' + count('update') + ' · 취소 ' + count('cancel'), ''];
+
+  // 새 일정: 날짜별 개수
+  const byDate = {};
+  const dates = [];
+  actions.forEach(function (a) {
+    if (a.type !== 'create' || !a.start) return;
+    const d = Utilities.formatDate(parseDate_(a.start), TZ, 'yyyyMMdd');
+    if (!byDate[d]) { byDate[d] = { n: 0, label: fmtDate_(parseDate_(a.start), false) }; dates.push(d); }
+    byDate[d].n++;
   });
-  if (actions.length > COMPACT_MAX_LINES_) lines.push('…외 ' + (actions.length - COMPACT_MAX_LINES_) + '개');
-  const lowCount = actions.filter(function (a) { return a.confidence === 'low'; }).length;
-  return '일정 ' + actions.length + '개를 반영할까요?\n(많아서 메모는 생략, 캘린더에는 모두 들어감)\n\n' +
-    lines.join('\n') + (lowCount ? '\n\n⚠ 확실하지 않은 항목 ' + lowCount + '개' : '');
+  dates.sort();
+  const changes = actions.filter(function (a) { return a.type !== 'create'; });
+  const maxDates = changes.length ? COMPACT_MAX_DATES_ : COMPACT_MAX_DATES_ + 3;
+  dates.slice(0, maxDates).forEach(function (d) { out.push(byDate[d].label + ' ' + byDate[d].n + '개'); });
+  if (dates.length > maxDates) out.push('…외 ' + (dates.length - maxDates) + '일');
+
+  // 변경·취소: 어느 기존 일정인지 꼭 보이게
+  if (changes.length) {
+    out.push('');
+    changes.slice(0, COMPACT_MAX_CHANGES_).forEach(function (a) {
+      const old = a.event_id && eventsById[a.event_id];
+      out.push('[' + (a.type === 'cancel' ? '취소' : '변경') + '] ' + cut(old ? old.title : (a.title || '?'), 12));
+    });
+    if (changes.length > COMPACT_MAX_CHANGES_) out.push('…외 ' + (changes.length - COMPACT_MAX_CHANGES_) + '개');
+  }
+
+  const flags = [];
+  const imp = actions.filter(function (a) { return a.important; }).length;
+  const low = actions.filter(function (a) { return a.confidence === 'low'; }).length;
+  if (imp) flags.push('❗중요 ' + imp);
+  if (low) flags.push('⚠확실치 않음 ' + low);
+  if (flags.length) out.push('', flags.join(' · '));
+  return out.join('\n');
 }
 
 // ---------------------------------------------------------------- 수동 테스트 / 도우미

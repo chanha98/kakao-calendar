@@ -8,3 +8,6 @@ Config.gs
 node_modules/
 .DS_Store
 Thumbs.db
+
+# 실제 일정표 등 테스트용 문서 (외부 반출 금지 자료)
+*.pdf
