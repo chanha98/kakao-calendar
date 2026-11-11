@@ -26,6 +26,7 @@ function createEvent_(cal, a) {
     const e = a.end ? parseDate_(a.end) : new Date(s.getTime() + 3600000);
     ev = cal.createEvent(a.title, s, e, opts);
   }
+  if (a.important) ev.setColor(CalendarApp.EventColor.RED);
   return '새 일정: ' + ev.getTitle() + ' · ' + fmtRange_(a.start, a.end, a.all_day);
 }
 
@@ -49,6 +50,9 @@ function updateEvent_(ev, a) {
       ev.setTime(s, e);
     }
     changes.push('시간');
+  } else if (a.end && !ev.isAllDayEvent()) {
+    ev.setTime(ev.getStartTime(), parseDate_(a.end));  // 끝 시간만 바뀜
+    changes.push('끝 시간');
   }
   if (a.location) {
     ev.setLocation(a.location);
@@ -57,6 +61,10 @@ function updateEvent_(ev, a) {
   if ((a.props && a.props.length) || a.note) {
     ev.setDescription(buildDescription_(ev.getDescription() || '', a));
     changes.push(a.props && a.props.length ? '소품' : '메모');
+  }
+  if (a.important) {
+    ev.setColor(CalendarApp.EventColor.RED);
+    changes.push('중요 표시');
   }
   return '변경: ' + ev.getTitle() + ' (' + (changes.join(', ') || '변경 없음') + ')';
 }
@@ -101,7 +109,8 @@ function buildDescription_(current, a) {
       ' (' + (p.from ? p.from + '→' + p.to + ', ' : '') + stamp + ' 변경)';
   });
 
-  if (a.note) body = (body ? body + '\n' : '') + '• ' + a.note + ' (' + stamp + ')';
+  // 새 일정이면 메모를 그대로, 기존 일정에 덧붙일 때만 "[MM/dd 추가]" 구분 줄을 따로 넣음
+  if (a.note) body = body ? body + '\n\n[' + stamp + ' 추가]\n' + a.note : a.note;
 
   let out = body;
   if (order.length) {

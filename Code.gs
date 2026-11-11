@@ -2,7 +2,7 @@
  * 카톡 단톡방 메시지 → 구글 캘린더 반자동 반영
  *
  * iOS 단축어가 이 웹앱으로 POST(JSON) 요청을 보냅니다.
- *   { "secret": "...", "action": "parse", "text": "카톡 내용" }
+ *   { "secret": "...", "action": "parse", "text": "카톡 내용", "images": "base64 (여러 장이면 줄바꿈으로 구분, 선택)" }
  *     → { ok, summary, token }   (token이 비어 있으면 반영할 내용 없음)
  *   { "secret": "...", "action": "apply", "token": "..." }
  *     → { ok, summary }
@@ -25,7 +25,7 @@ function doPost(e) {
       if (!useQuota_(user, cfg)) {
         return json_({ ok: false, summary: '오늘 사용 횟수(' + cfg.dailyLimit + '회)를 모두 썼습니다. 내일 다시 이용해 주세요.' });
       }
-      return json_(handleParse_(String(body.text || ''), cfg, user));
+      return json_(handleParse_(String(body.text || ''), cfg, user, parseImages_(body.images)));
     }
     if (body.action === 'apply') return json_(handleApply_(String(body.token || ''), cfg, user));
     return json_({ ok: false, summary: '알 수 없는 action: ' + body.action });
@@ -72,9 +72,10 @@ function getCalendar_(calendarId) {
 
 // ---------------------------------------------------------------- parse
 
-function handleParse_(text, cfg, user) {
+function handleParse_(text, cfg, user, images) {
+  images = images || [];
   const extracted = extractMessages_(text, user.stateKey);
-  if (!extracted.messages.trim()) {
+  if (!extracted.messages.trim() && !images.length) {
     return { ok: true, token: '', summary: extracted.isExport
       ? '지난번 이후 새 메시지가 없습니다.'
       : '분석할 텍스트가 없습니다.' };
@@ -82,7 +83,7 @@ function handleParse_(text, cfg, user) {
 
   const cal = getCalendar_(user.calendarId);
   const events = listEvents_(cal);
-  const actions = callClaude_(extracted.messages, events, cfg);
+  const actions = callClaude_(extracted.messages, events, cfg, images);
 
   if (!actions.length) {
     // 새 메시지는 확인했으니 다음엔 건너뛰도록 처리 시각만 저장
@@ -100,6 +101,39 @@ function handleParse_(text, cfg, user) {
   const byId = {};
   events.forEach(function (ev) { byId[ev.id] = ev; });
   return { ok: true, token: token, summary: formatSummary_(actions, byId) };
+}
+
+const MAX_IMAGES_ = 5;
+const MAX_IMAGE_B64_ = 6.5 * 1024 * 1024;   // base64 기준 약 5MB (Claude API 이미지 한도)
+
+/**
+ * 단축어가 보낸 이미지(base64) 정리.
+ * 문자열(여러 장이면 쉼표로 구분) 또는 배열 모두 받음. data:...;base64, 접두어도 허용(쉼표로 잘린 뒤 버려짐).
+ */
+function parseImages_(raw) {
+  if (!raw) return [];
+  // 구분자는 쉼표(,)만. base64 인코딩 옵션에 따라 중간에 줄바꿈이 들어갈 수 있어 공백·줄바꿈은 지움
+  const parts = Array.isArray(raw) ? raw : String(raw).split(',');
+  const list = parts
+    .map(function (s) { return String(s || '').replace(/\s+/g, '').replace(/^data:[^;]*;base64$/, ''); })
+    .filter(function (s) { return s.length > 100; });   // 빈 값·찌꺼기 제외
+  if (list.length > MAX_IMAGES_) throw new Error('이미지는 한 번에 ' + MAX_IMAGES_ + '장까지 보낼 수 있습니다.');
+  return list.map(function (data, i) {
+    if (data.length > MAX_IMAGE_B64_ && data.indexOf('JVBERi0') !== 0) throw new Error((i + 1) + '번째 이미지가 너무 큽니다. 단축어의 크기 조절 단계를 확인해 주세요.');
+    const mediaType = imageMediaType_(data);
+    if (!mediaType) throw new Error((i + 1) + '번째 파일 형식을 읽을 수 없습니다. 이미지(JPEG) 또는 PDF만 보낼 수 있습니다.');
+    return { mediaType: mediaType, data: data };
+  });
+}
+
+/** base64 앞부분으로 이미지 형식 판별 (HEIC 등 미지원 형식은 '') */
+function imageMediaType_(b64) {
+  if (b64.indexOf('/9j/') === 0) return 'image/jpeg';
+  if (b64.indexOf('iVBORw0KGgo') === 0) return 'image/png';
+  if (b64.indexOf('R0lGOD') === 0) return 'image/gif';
+  if (b64.indexOf('UklGR') === 0) return 'image/webp';
+  if (b64.indexOf('JVBERi0') === 0) return 'application/pdf';   // PDF는 이미지로 바꾸지 않고 그대로 Claude에 보냄
+  return '';
 }
 
 function listEvents_(cal) {
@@ -186,21 +220,43 @@ function formatSummary_(actions, eventsById) {
       head += (old ? old.title : (a.title || a.event_id));
       if (old) head += ' (' + fmtRange_(old.start, old.end, old.all_day) + ')';
     }
+    if (a.important) head += '  ❗중요(빨간색)';
     lines.push(head);
     if (a.type === 'update') {
       if (a.title && old && a.title !== old.title) lines.push('   제목 → ' + a.title);
       if (a.start) lines.push('   시간 → ' + fmtRange_(a.start, a.end, a.all_day));
+      else if (a.end) lines.push('   끝 시간 → ' + fmtDate_(new Date(a.end), true));
     }
     if (a.location) lines.push('   장소: ' + a.location);
     (a.props || []).forEach(function (p) {
       lines.push('   소품: ' + p.name + ' ' + (p.from ? p.from + '→' : '') + p.to);
     });
-    if (a.note) lines.push('   메모: ' + a.note);
+    if (a.note) lines.push('   메모: ' + a.note.split('\n').join('\n         '));
     if (a.confidence === 'low') lines.push('   ⚠ 확실하지 않음: "' + (a.source_quote || '') + '"');
     if (a.type !== 'create' && !old) lines.push('   ⚠ 기존 일정을 찾지 못함');
     return lines.join('\n');
   });
-  return '이렇게 반영할까요?\n\n' + out.join('\n');
+  const full = '이렇게 반영할까요?\n\n' + out.join('\n');
+  // 단축어 메뉴 창은 설명 글을 스크롤할 수 없어서 길면 반영/취소 버튼이 화면 밖으로 밀려남 → 짧은 목록으로
+  return full.length <= SUMMARY_MAX_CHARS_ ? full : compactSummary_(actions);
+}
+
+const SUMMARY_MAX_CHARS_ = 900;
+const COMPACT_MAX_LINES_ = 12;
+
+/** 일정이 많을 때: 한 줄씩(제목은 짧게), 메모 생략, 넘치면 "…외 N개" */
+function compactSummary_(actions) {
+  const label = { create: '새', update: '변경', cancel: '취소' };
+  const cut = function (s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) + '…' : s; };
+  const lines = actions.slice(0, COMPACT_MAX_LINES_).map(function (a) {
+    const when = a.start ? fmtRange_(a.start, a.end, a.all_day) : '';
+    return (a.important ? '❗' : '') + '[' + (label[a.type] || a.type) + '] ' +
+      (when ? when + ' ' : '') + cut(a.title || '(기존 일정)', 14);
+  });
+  if (actions.length > COMPACT_MAX_LINES_) lines.push('…외 ' + (actions.length - COMPACT_MAX_LINES_) + '개');
+  const lowCount = actions.filter(function (a) { return a.confidence === 'low'; }).length;
+  return '일정 ' + actions.length + '개를 반영할까요?\n(많아서 메모는 생략, 캘린더에는 모두 들어감)\n\n' +
+    lines.join('\n') + (lowCount ? '\n\n⚠ 확실하지 않은 항목 ' + lowCount + '개' : '');
 }
 
 // ---------------------------------------------------------------- 수동 테스트 / 도우미
